@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32-S3 网页烧录工具</title>
+    <!-- 引入 esptool-js 库 -->
+    <script src="https://unpkg.com/esptool-js@0.5.0/bundle.js" type="module"></script>
+    <style>
+        /* 页面基本样式 */
+        body {
+            background-color: #000000;
+            color: #00FF00;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 16px;
+            margin: 20px;
+            padding: 0;
+        }
+
+        /* 日志容器样式 */
+        #log-container p {
+            margin: 5px 0;
+            white-space: pre-wrap;
+            /* 保证日志格式正确显示 */
+            word-break: break-all;
+        }
+
+        /* 进度条的特定样式 */
+        #progress-line {
+            color: #FFFF00;
+            /* 黄色以突出显示 */
+        }
+
+        /* 按钮样式 */
+        button {
+            background-color: #003300;
+            color: #00FF00;
+            border: 1px solid #00FF00;
+            padding: 10px 20px;
+            font-family: inherit;
+            font-size: 16px;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: background-color 0.3s;
+        }
+
+        button:hover {
+            background-color: #005500;
+        }
+
+        button:disabled {
+            background-color: #001a00;
+            color: #004d00;
+            border-color: #004d00;
+            cursor: not-allowed;
+        }
+
+        /* 确认对话框模态窗口样式 */
+        .modal {
+            display: none;
+            /* 默认隐藏 */
+            position: fixed;
+            z-index: 100;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0, 0, 0, 0.7);
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-content {
+            background-color: #001a00;
+            padding: 30px;
+            border: 1px solid #00FF00;
+            width: 80%;
+            max-width: 500px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 255, 0, 0.2);
+        }
+
+        .modal-buttons {
+            margin-top: 20px;
+        }
+
+        .modal-buttons button {
+            margin: 0 10px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- 日志和交互按钮的容器 -->
+    <div id="log-container"></div>
+    <button id="flashButton">开始连接并烧录</button>
+
+    <!-- 确认操作的模态对话框 -->
+    <div id="confirmModal" class="modal">
+        <div class="modal-content">
+            <p>您确定要烧录固件吗？</p>
+            <p style="color: #FF5555;">此操作将擦除设备上的现有数据。</p>
+            <div class="modal-buttons">
+                <button id="confirmBtn">确认烧录</button>
+                <button id="cancelBtn">取消</button>
+            </div>
+        </div>
+    </div>
+
+    <script type="module">
+        function arrayBufferToBinaryString(buffer) {
+            const bytes = new Uint8Array(buffer);
+            let binary = '';
+            for (let i = 0; i < bytes.length; i++) {
+                binary += String.fromCharCode(bytes[i]);
+            }
+            return binary;
+        }
+
+
+        import { ESPLoader, Transport } from 'https://unpkg.com/esptool-js@0.5.0/bundle.js';
+
+        // --- 全局变量和常量 ---
+        const flashButton = document.getElementById('flashButton');
+        const logContainer = document.getElementById('log-container');
+        const confirmModal = document.getElementById('confirmModal');
+        const confirmBtn = document.getElementById('confirmBtn');
+        const cancelBtn = document.getElementById('cancelBtn');
+
+        const FIRMWARE_PATH = 'hid_touch/build/tusb_hid_merged.bin';
+        const BAUD_RATE = 921600; // 使用较高的波特率以提高烧录速度
+        function log(message, id) {
+            let p = id ? document.getElementById(id) : null;
+            if (!p) {
+                p = document.createElement('p');
+                if (id) p.id = id;
+                logContainer.appendChild(p);
+            }
+            p.textContent = message;
+        }
+        function showConfirmation() {
+            return new Promise((resolve) => {
+                confirmModal.style.display = 'flex';
+
+                confirmBtn.onclick = () => {
+                    confirmModal.style.display = 'none';
+                    resolve(true);
+                };
+
+                cancelBtn.onclick = () => {
+                    confirmModal.style.display = 'none';
+                    resolve(false);
+                };
+            });
+        }
+        window.onload = () => {
+            log('请将您的 ESP32-S3 设备连接到电脑，并点击下方按钮。');
+            log('连接串口（COM）或者在按住BOOT键的情况下，插入USB口');
+        };
+        flashButton.addEventListener('click', async () => {
+            flashButton.disabled = true; // 防止重复点击
+            try {
+                log('正在等待用户选择串口设备...');
+                const device = await navigator.serial.requestPort();
+                const transport = new Transport(device, true)
+                const loaderOptions = {
+                    transport,
+                    baudrate: BAUD_RATE,
+                    terminal: {
+                        clean() { },
+                        write(data) {
+                            // 可以在这里处理从设备接收到的原始数据，但本次应用不需要
+                            log(data);
+                        },
+                        writeLine(data) {
+                            log(data);
+                        }
+                    },
+                };
+                const esploader = new ESPLoader(loaderOptions);
+                console.log("esploader", esploader)
+                const chip = await esploader.main();
+                console.log("chip", chip)
+                log(`设备已连接`);
+                const confirmed = await showConfirmation();
+                if (!confirmed) {
+                    log('用户取消了烧录操作。');
+                    flashButton.disabled = false;
+                    return;
+                }
+                log('正在获取固件文件...');
+                const response = await fetch(FIRMWARE_PATH);
+                if (!response.ok) {
+                    throw new Error(`无法找到固件文件，请检查路径是否正确: ${response.statusText}`);
+                }
+                const firmware_data = await response.arrayBuffer();
+                log(`固件获取成功，大小: ${firmware_data.byteLength} 字节。`);
+                log('准备烧录，请勿断开设备...');
+                const flashOptions = {
+                    fileArray: [{
+                        address: 0x00,
+                        data: arrayBufferToBinaryString(firmware_data),
+                    }],
+                    flashSize: "keep",
+                    eraseAll: true,
+                    compress: true,
+                    reportProgress: (fileIndex, written, total) => {
+                        const progress = Math.round((written / total) * 100);
+                    },
+                };
+                await esploader.eraseFlash();
+                // 7. 执行烧写
+                await esploader.writeFlash(flashOptions);
+                log('烧录成功！');
+                log('设备将自动重启。');
+                log('如果设备没有自动重启，请手动按下 RST 键。');
+                // 8. 烧写完成后硬复位设备
+                await esploader.hardReset();
+
+            } catch (error) {
+                console.error(error);
+                log(`错误:  ${error.message}`);
+                flashButton.disabled = false;
+                return;
+            }
+        });
+    </script>
+
+</body>
+
+</html>
