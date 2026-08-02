@@ -1,0 +1,150 @@
+//go:build ignore || plugin
+// +build ignore plugin
+
+package main
+
+import (
+	"fmt"
+	"math"
+)
+
+const (
+	DEBUG_ENABLED = false
+)
+
+func DEBUG(msg string) {
+	if DEBUG_ENABLED {
+		fmt.Println(msg)
+	}
+}
+
+func DEBUGF(format string, args ...interface{}) {
+	if DEBUG_ENABLED {
+		fmt.Printf(format+"\n", args...)
+	}
+}
+
+const (
+	PluginID             string = "lty.go-touch-mapper.default-plugin.v0.0.1"
+	PluginConfigTemplate string = `{
+        "数值类型": {
+            "type": "int32",
+            "default": 5,
+            "min": 1,
+            "max": 20,
+            "description": "int32整数，滑块调整，可设置最大最小值"
+        },
+        "开关类型": {
+            "type": "bool",
+            "default": true,
+            "description": "具有true与fals两种状态，传递是bool类型"
+        },
+        "字符串类型": {
+            "type": "string",
+            "default": "KEY_A",
+            "description": "可输入自定义文本"
+        },
+        "选择类型": {
+            "type": "select",
+            "default": 0,
+            "values": [
+                "选项1",
+                "选项2",
+                "选项3",
+                "选项4",
+                "选项5",
+                "选项6"
+            ],
+            "description": "提供固选项以供选择，获取值为选项的下标"
+        }
+    }`
+)
+
+func update_wheel_xy(last_x, last_y, target_x, target_y int32) (int32, int32) {
+	const WHEEL_STEP_VAL = int32(120)
+	if last_x == target_x && last_y == target_y {
+		return last_x, last_y
+	} else {
+		x_rest := target_x - last_x
+		y_rest := target_y - last_y
+		total_rest := int32(math.Sqrt(float64(x_rest*x_rest + y_rest*y_rest)))
+		if total_rest <= WHEEL_STEP_VAL {
+			return target_x, target_y
+		} else {
+			return last_x + x_rest*WHEEL_STEP_VAL/total_rest, last_y + y_rest*WHEEL_STEP_VAL/total_rest
+		}
+	}
+}
+
+type CustomWheel struct {
+	userConfig       map[string]interface{}
+	wheelRadius      int32
+	shiftWheelRadius int32
+	centerX          int32
+	center_y         int32
+	screen_x         int32
+	screen_y         int32
+	//=========================================
+	last_wheel_asix_x  int32
+	last_wheel_asix_y  int32
+	last_shift_pressed bool
+	counter            uint32 //记录当xyshift不变的情况下调用的次数
+	target_x           int32  //目标x坐标
+	target_y           int32  //目标y坐标
+
+}
+
+func initWheel() *CustomWheel {
+	return &CustomWheel{}
+}
+
+func (cw *CustomWheel) update_user_config(userConfig map[string]interface{}) {
+	cw.userConfig = userConfig
+}
+func (cw *CustomWheel) update_wheel_config(wheelRadius, shiftWheelRadius, centerX, center_y, screen_x, screen_y int32) {
+	cw.wheelRadius = wheelRadius
+	cw.shiftWheelRadius = shiftWheelRadius
+	cw.centerX = centerX
+	cw.center_y = center_y
+	cw.screen_x = screen_x
+	cw.screen_y = screen_y
+}
+
+func (cw *CustomWheel) get_wheel_move_target(wheel_pos_x, wheel_pos_y, wheel_axis_x, wheel_asix_y int32, shift_pressed bool) (int32, int32) {
+	if cw.last_wheel_asix_x != wheel_axis_x || cw.last_wheel_asix_y != wheel_asix_y || cw.last_shift_pressed != shift_pressed {
+		cw.counter = 0
+		usingRadius := cw.wheelRadius
+		if shift_pressed {
+			usingRadius = cw.shiftWheelRadius
+		}
+		if wheel_axis_x*wheel_asix_y != 0 {
+			usingRadius = usingRadius * 707 / 1000
+		}
+		cw.target_x = cw.centerX + wheel_axis_x*usingRadius
+		cw.target_y = cw.center_y + wheel_asix_y*usingRadius
+		if cw.target_x < 0 {
+			cw.target_x = 0
+		} else if cw.target_x > cw.screen_x {
+			cw.target_x = cw.screen_x
+		}
+		if cw.target_y < 0 {
+			cw.target_y = 0
+		} else if cw.target_y > cw.screen_y {
+			cw.target_y = cw.screen_y
+		}
+		DEBUGF("wheel_pos_x: %d, wheel_pos_y: %d, wheel_axis_x: %d, wheel_asix_y: %d, shift_pressed: %v, usingRadius: %d, target_x: %d, target_y: %d\n", wheel_pos_x, wheel_pos_y, wheel_axis_x, wheel_asix_y, shift_pressed, usingRadius, cw.target_x, cw.target_y)
+	}
+	cw.last_wheel_asix_x = wheel_axis_x
+	cw.last_wheel_asix_y = wheel_asix_y
+	cw.last_shift_pressed = shift_pressed
+	//====================================================================================
+	if wheel_pos_x == cw.target_x && wheel_pos_y == cw.target_y {
+		return wheel_pos_x, wheel_pos_y
+	} else {
+		cw.counter++
+		x, y := update_wheel_xy(wheel_pos_x, wheel_pos_y, cw.target_x, cw.target_y)
+		DEBUGF("wheel_pos_x: %d, wheel_pos_y: %d, target_x: %d, target_y: %d, x: %d, y: %d\n", wheel_pos_x, wheel_pos_y, cw.target_x, cw.target_y, x, y)
+		return x, y
+	}
+
+}
